@@ -1,0 +1,24 @@
+
+# Sendmail program
+#mailprog=/usr/sbin/sendmail
+
+# Mail settings
+#report_from=user@domain.com
+#report_to=user@domain.com
+#report_subject='[domain.com] swiss-dnsblock update'
+
+# IP address to which to redirect requests
+#blacklist_ip=1.2.3.4
+
+# Zone file header (containing __SERIAL__ variable)
+#blacklist_header=$workdir/data/zone.header.txt
+
+# Generated temporary zone file
+#blacklist_zonefile=$workdir/data/zone.txt
+
+# Serial number file
+#blacklist_serial=$workdir/data/serial.txt
+
+# Final zone file
+#bind_zonefile=/etc/bind/db.rpz-swiss-dnsblock
+

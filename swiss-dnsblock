@@ -1,0 +1,156 @@
+#!/bin/bash
+
+workdir=/usr/local/swiss-dnsblock/
+
+# Set defaults
+
+# Don't send any mails by default
+mailprog=
+
+# Mail settings
+report_from=user@domain.com
+report_to=user@domain.com
+report_subject='[domain.com] swiss-dnsblock update'
+
+# IP address to which to redirect requests
+blacklist_ip=1.2.3.4
+
+# Zone file header (containing __SERIAL__ variable)
+blacklist_header=$workdir/data/zone.header.txt
+
+# Generated temporary zone file
+blacklist_zonefile=$workdir/data/zone.txt
+
+# Serial number file
+blacklist_serial=$workdir/data/serial.txt
+
+# Final zone file (not created if empty)
+bind_zonefile=
+
+# Load configuration
+. $workdir/data/config.txt
+
+change=0
+
+function send_report() {
+    report=$1
+
+    if [ -z "$mailprog" ]; then
+        echo $report
+    else
+        cat <<EOF | $mailprog $report_to
+From: $report_from
+To: $report_to
+Subject: $report_subject
+
+$report
+EOF
+    fi
+}
+
+case "$1" in
+    force-update)
+        change=1
+        ;;
+    update)
+        ;;
+    *)
+        echo "Usage: $0 {update|force-update}"
+        exit 1
+        ;;
+esac
+
+#
+# Update ESBK Blocklist
+#
+$workdir/swiss-dnsblock.esbk $workdir/data/esbk/
+status=$?
+
+case "$status" in
+    0)
+    # No change.
+    ;;
+    1)
+        change=1
+        ;;
+    *)
+        send_report "ERROR: update.esbk exited with status $status"
+        exit 1
+        ;;
+esac
+
+#
+# Update Comlot Blocklist
+#
+$workdir/swiss-dnsblock.comlot $workdir/data/comlot/
+status=$?
+
+case "$status" in
+    0)
+    # No change.
+    ;;
+    1)
+        change=1
+        ;;
+    *)
+        send_report "ERROR: update.comlot exited with status $status"
+        exit 1
+        ;;
+esac
+
+#
+# Update RPZ Zonefile if anything has changed.
+#
+if [ "$change" == "0" ]; then
+    exit 0
+fi
+
+# Blacklist has changed.
+
+# Filter comments and empty lines
+cat $workdir/data/*/blacklist.txt | grep . | grep -o '^[^#]*' | sort | uniq > $workdir/data/blacklist.txt
+
+# Increment serial
+if [ -f "$blacklist_serial" ]; then
+    serial=`cat $blacklist_serial`
+else
+    serial=0
+fi
+serial=$((serial + 1))
+echo $serial > $blacklist_serial
+
+# Create zonefile
+(
+    # BIND zone file header
+    sed "s/__SERIAL__/$serial/" $blacklist_header
+
+    # Filter comments, empty lines and duplicates and create zone records
+    cat $workdir/data/*/blacklist.txt | \
+        sort | \
+        uniq | \
+        awk "/^[^#$]/ { print \$1\"\tIN A\t$blacklist_ip\n*.\"\$1\"\tIN A\t$blacklist_ip\" }"
+) > $blacklist_zonefile
+
+# If bind_zonefile is empty, skip deployment.
+if [ -z "$bind_zonefile" ]; then
+    send_report "Blacklist has changed, but wasn't deployed (\$bind_zonefile is empty)."
+    exit 0
+fi
+
+# Check zonefile if named-checkzone is available
+if [ -x /usr/sbin/named-checkzone ]; then
+    /usr/sbin/named-checkzone -q rpz-swiss-dnsblock $blacklist_zonefile
+    if [ $? != 0 ]; then
+        send_report "Blacklist has changed, but zonefile is invalid and was not deployed."
+        exit 1
+    fi
+fi
+
+# Deploy new version
+cp $blacklist_zonefile $bind_zonefile
+
+service bind9 reload
+
+send_report "Blacklist has changed, new $bind_zonefile deployed."
+
+exit 0

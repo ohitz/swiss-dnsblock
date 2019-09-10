@@ -1,0 +1,60 @@
+#!/bin/bash
+#
+# Update the Comlot Blacklist.
+#
+# Return status:
+# 0: No changes
+# 1: File has changed
+# other: Error
+#
+
+# URL where the blacklist can be fetched from
+blacklist_url=https://blacklist.comlot.ch/comlot_blacklist.txt
+
+# Create temporary directory
+tempdir=`mktemp -d`
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 DIRECTORY"
+    exit 1
+fi
+
+dir=$1
+if [ ! -d "$dir" ]; then
+    echo "$dir is not a directory!"
+    exit 1
+fi
+
+# Fetch and unpack blacklist
+curl --silent -o $tempdir/blacklist.txt $blacklist_url
+
+# Compare to current blacklist
+if cmp -s "$tempdir/blacklist.txt" "$dir/blacklist.txt"; then
+    # No change.
+
+    # Delete temporary directory
+    rm -rf $tempdir
+
+    exit 0;
+fi
+
+# Extract version and serial
+version=`awk '/^#Version:/ { print $2; }' $tempdir/blacklist.txt`
+serial=`awk '/^#Serial:/ { print $2; }' $tempdir/blacklist.txt`
+
+# Check version
+if [ "$version" != "1" ]; then
+    echo "Unsupported version $version!"
+    exit 2
+fi
+
+# Copy file
+cp $tempdir/blacklist.txt $dir/blacklist.$serial.txt
+
+# Link to new file
+ln -f -s blacklist.$serial.txt $dir/blacklist.txt
+
+# Delete temporary directory
+rm -rf $tempdir
+
+exit 1

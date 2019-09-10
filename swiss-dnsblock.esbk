@@ -1,0 +1,116 @@
+#!/bin/bash
+#
+# Update the ESBK Blacklist.
+#
+# Return status:
+# 0: No changes
+# 1: File has changed
+# other: Error
+#
+
+# URL where the blacklist can be fetched from
+blacklist_url=https://www.esbk.admin.ch/dam/data/esbk/illegalesspiel/zugangssperren/blacklist.eml
+
+# Certificate locations
+rootcert_url=https://www.bit.admin.ch/dam/bit/de/dokumente/pki/scanning_center/swiss_governmentrootcaii.crt.download.crt/swiss_governmentrootcaii.crt
+intcert_url=https://www.bit.admin.ch/dam/bit/de/dokumente/pki/scanning_center/swiss_governmentregularca01.cer.download.cer/swiss_governmentregularca01.cer
+
+# Create temporary directory
+tempdir=`mktemp -d`
+
+set -e
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 DIRECTORY"
+    exit 1
+fi
+
+dir=$1
+if [ ! -d "$dir" ]; then
+    echo "$dir is not a directory!"
+    exit 1
+fi
+
+# Fetch and unpack blacklist
+curl --silent -o $tempdir/blacklist.eml $blacklist_url
+
+# Compare to current blacklist
+if cmp -s "$tempdir/blacklist.eml" "$dir/blacklist.eml"; then
+    # No change.
+
+    # Delete temporary directory
+    rm -rf $tempdir
+
+    exit 0;
+fi
+
+# Verify new eml file
+
+# Download root certificate
+curl --silent -o $tempdir/rootcert.crt $rootcert_url
+openssl x509 -in $tempdir/rootcert.crt -out $tempdir/rootcert.pem -outform pem
+
+# Download Intermediate certificate
+curl --silent -o $tempdir/intcert.cer $intcert_url
+openssl x509 -inform der -in $tempdir/intcert.cer -out $tempdir/intcert.pem
+
+# Build certificate chain
+cat $tempdir/rootcert.pem $tempdir/intcert.pem > $tempdir/swiss_gov_ca_cert.pem
+
+# Verify blacklist.eml and extract certificate
+openssl smime -verify -in $tempdir/blacklist.eml -CAfile $tempdir/swiss_gov_ca_cert.pem -signer $tempdir/cert.pem -out $tempdir/textdata 2>&1 | grep -q 'Verification successful'
+if [ "$?" != 0 ]; then
+    echo "blacklist.eml verification not successful!"
+    exit 2
+fi
+
+# Check certificate of blacklist.eml has been issued for provider@esbk.admin.ch
+openssl x509 -noout -text -in $tempdir/cert.pem | grep provider@esbk.admin.ch | grep email | awk -Femail: '{ print $2}' | grep -q provider@esbk.admin.ch
+if [ "$?" != 0 ]; then
+    echo "blacklist.eml not signed by provider@esbk.admin.ch"
+    exit 2
+fi
+
+# Get revocation list
+crl_url=$(openssl x509 -noout -text -in $tempdir/cert.pem | grep -A 4 'X509v3 CRL Distribution Points' | awk -FURI: '/URI:/ { print $2 }')
+curl --silent -o $tempdir/revocation-list.crl $crl_url
+openssl crl -inform DER -in $tempdir/revocation-list.crl -outform PEM -out $tempdir/revocation-list.pem
+
+# Build revocation chain
+cat $tempdir/swiss_gov_ca_cert.pem $tempdir/revocation-list.pem > $tempdir/revocation-chain.pem
+
+#Verify blacklist.eml against Certificate Chain AND Revocation List:
+openssl smime -verify -crl_check -in $tempdir/blacklist.eml -CAfile $tempdir/revocation-chain.pem -out $tempdir/textdata 2>&1 | grep -q 'Verification successful'
+if [ "$?" != 0 ]; then
+    echo "CRL verfication failed"
+    exit 2
+fi
+
+# Unpack eml file
+munpack -q -t -C $tempdir < $tempdir/blacklist.eml 2>&1 > /dev/null
+
+# The result is in $tempdir/esbk_blacklist.txt. Contains 0xff and 0x0d which are removed here.
+cat $tempdir/esbk_blacklist.txt | tr -d '\377\015' > $tempdir/blacklist.txt
+
+# Extract version and serial
+version=`awk '/^#Version:/ { print $2; }' $tempdir/blacklist.txt`
+serial=`awk '/^#Serial:/ { print $2; }' $tempdir/blacklist.txt`
+
+# Check version
+if [ "$version" != "1.0" ]; then
+    echo "Unsupported version $version!"
+    exit 2
+fi
+
+# Copy files
+cp $tempdir/blacklist.eml $dir/blacklist.$serial.eml
+cp $tempdir/blacklist.txt $dir/blacklist.$serial.txt
+
+# Link to new file
+ln -f -s blacklist.$serial.eml $dir/blacklist.eml
+ln -f -s blacklist.$serial.txt $dir/blacklist.txt
+
+# Delete temporary directory
+rm -rf $tempdir
+
+exit 1

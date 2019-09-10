@@ -1,0 +1,9 @@
+$TTL 900
+@			IN SOA		dnsblock.domain.com. hostmaster.domain.com. (
+					__SERIAL__
+					10800
+					3600
+					604800
+					86400 )
+			IN NS		dnsblock.domain.com.
+
