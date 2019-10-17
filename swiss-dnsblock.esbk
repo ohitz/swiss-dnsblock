@@ -97,7 +97,7 @@ version=`awk '/^#Version:/ { print $2; }' $tempdir/blacklist.txt`
 serial=`awk '/^#Serial:/ { print $2; }' $tempdir/blacklist.txt`
 
 # Check version
-if [ "$version" != "1.0" ]; then
+if [[ ! "$version" =~ ^1\.[01]$ ]]; then
     echo "Unsupported version $version!"
     exit 2
 fi
